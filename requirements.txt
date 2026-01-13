@@ -32,7 +32,7 @@ dill==0.3.8
     #   multiprocess
 executing==2.2.0
     # via stack-data
-filelock==3.18.0
+filelock==3.20.3
     # via
     #   datasets
     #   huggingface-hub
