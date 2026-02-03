@@ -176,7 +176,7 @@ pillow==11.3.0
     # via
     #   matplotlib
     #   torchvision
-pip==25.2
+pip==26.0
     # via hdr-smood-challenge-sample (pyproject.toml)
 platformdirs==4.3.8
     # via jupyter-core
