@@ -1,93 +1,234 @@
-# Imageomics HDR Scientific Mood Challenge Sample
+# Beetles as Sentinel Taxa - End-to-End CodaBench Solution
 
-This repository contains sample training code and submissions for the [2025 HDR Scientific Mood (Modeling out of distribution) Challenge: Beetles as Sentinel Taxa](https://www.codabench.org/competitions/9854/). It is designed to give participants a reference for both working on the challenge, and also the expected publication of their submissions following the challenge (i.e., how to open-source your submission).
+This repository contains an event-level probabilistic regression pipeline for the CodaBench challenge:
+**"Beetles as Sentinel Taxa: Predicting drought conditions from NEON specimen imagery"**.
 
-## Repository Structure
+The model predicts Gaussian parameters `(mu, sigma)` for:
+- `SPEI_30d`
+- `SPEI_1y`
+- `SPEI_2y`
 
-For your repository, you will want to complete the structure information below and add other files (e.g., training code):
+It trains with Gaussian NLL and supports:
+- post-hoc sigma calibration
+- site/domain-aware out-of-sample validation
+- multi-fold ensemble inference with Gaussian moment fusion
+- metadata priors (scientificName/domainID) blended with image predictions
+
+## Project Structure
+
 ```
-submission/
-  <model weights>
-  model.py
+repo_root/
+  README.md
   requirements.txt
-```
-We also recommend that you include a [CITATION.cff](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-citation-files) for your work.
-
-**Note:** If you have requirements not included in the [whitelist](https://github.com/Imageomics/HDR-SMood-challenge/blob/main/ingestion_program/whitelist.txt), please check the [issues](https://github.com/Imageomics/HDR-SMood-challenge/issues) on the [challenge GitHub](https://github.com/Imageomics/HDR-SMood-Challenge) to see if someone else has requested it before making your own issue.
-
-### Structure of this Repository
-```
-HDR-SMood-challenge-sample/
-│
-├── baselines/
-│   ├── submissions/
-│   │   └── <MODEL NAME>/
-│   │       ├── model.pth
-│   │       ├── model.py
-│   │       ├── train.py
-│   │       └── requirements.txt
-│   └── training/
-│       └── <MODEL NAME>/
-│           ├── evaluation.py
-│           ├── model.py
-│           ├── train.py
-│           └── utils.py
-├── notebooks/
-|   └── train-data-exploration.ipynb
-├── .gitignore
-├── LICENSE
-└── README.md
+  model.py
+  weights/
+    model.pt
+  src/
+    data.py
+    train.py
+    train_ensemble.py
+    build_priors.py
+    eval.py
+    utils.py
+  scripts/
+    make_submission.sh
+    sanity_check_submission.py
+    colab_prepare.py
+    colab_train.py
 ```
 
-> [!IMPORTANT]  
-> Do not zip the whole folder submission folder when submitting your model to Codabench. ***Only*** select the `model.py` and relevant weight and requirements files to make the tarball.
+## Install
 
-#### Training Data Exploration
+Submission-time dependencies:
 
-This repository also includes `train-data-exploration.ipynb` which loads the training data from Hugging Face to perform various data analytics. Specifically, it looks at distributions of images, species, SPEI values, etc. over the various domains. To run this notebook, first clone this repository and create a fresh conda environment, then install the requirements file:
-
-```console
-conda create -n beetle-sample -c conda-forge pip -y
-conda activate beetle-sample
+```bash
 pip install -r requirements.txt
-jupyter lab
 ```
 
-## Installation & Running (for Training)
+Training/evaluation needs Hugging Face datasets:
 
-### Installation
-If you have `uv` simply run `uv sync`, otherwise you can use the `requirements.txt` file with either `conda` or `pip`.
-
-### Training
-An example training run can be executed by running the following:
-```
-python baselines/training/train.py
+```bash
+pip install datasets
 ```
 
-with `uv` do:
-```
-uv run python baselines/training/train.py
-```
+## Download Data
 
-The training data is available on the Imageomics Hugging Face: [Sentinel Beetles Dataset](https://huggingface.co/datasets/imageomics/sentinel-beetles). 
-
-### Evaluation
-Aftering training, you can locally evaluate your model by running the following:
-```
-python baselines/training/evaluation.py
+```bash
+python - <<'PY'
+from datasets import load_dataset
+load_dataset("imageomics/sentinel-beetles", split="train")
+print("download complete")
+PY
 ```
 
-with `uv` do:
+Optional: provide `HF_TOKEN` or pass `--hf_token` to scripts if needed.
+
+## Train (Single Fold)
+
+```bash
+python src/train.py \
+  --output_path weights/model.pt \
+  --epochs 12 \
+  --batch_size 8 \
+  --max_specimens_train 8 \
+  --n_splits 5 \
+  --fold 0 \
+  --crps_weight 0.25 \
+  --name_dropout_prob 0.15 \
+  --domain_dropout_prob 0.25
 ```
-uv run python baselines/training/evaluation.py
+
+Notes:
+- Event-level grouping is by `eventID`.
+- Validation is out-of-sample group split by `siteID` when available, otherwise `domainID`.
+- Best checkpoint is saved to `weights/model.pt` (single-fold format).
+- Sigma calibration factors are fitted on validation and stored in the checkpoint.
+
+## Train (Ensemble + Priors)
+
+This runs multiple folds, builds priors, and writes a submission manifest to `weights/model.pt`.
+
+```bash
+python src/train_ensemble.py \
+  --folds 0,1,2 \
+  --n_splits 5 \
+  --epochs 12 \
+  --batch_size 8 \
+  --max_specimens_train 8 \
+  --crps_weight 0.25 \
+  --name_dropout_prob 0.15 \
+  --domain_dropout_prob 0.25 \
+  --output_dir weights \
+  --manifest_path weights/model.pt \
+  --resume \
+  --skip_completed
 ```
 
-## References
-Baselines built off of BioCLIPv2 and Dinov2:
+Outputs:
+- `weights/fold_0.pt`, `weights/fold_1.pt`, ...
+- `weights/priors.json`
+- `weights/model.pt` (manifest consumed by submission `model.py`)
 
-Gu, Jianyang, et al. "Bioclip 2: Emergent properties from scaling hierarchical contrastive learning." arXiv preprint arXiv:2505.23883 (2025).
+Important:
+- If `weights/model.pt` has `fold_paths: []`, submission runs in prior-only mode and score is usually lower.
 
-Oquab, Maxime, et al. "Dinov2: Learning robust visual features without supervision." arXiv preprint arXiv:2304.07193 (2023).
+Apple Silicon (MPS) memory tip:
+- If you hit MPS OOM, lower `--batch_size` to `1-2` and `--max_specimens_train` to `4-6`.
 
-[Sample repo from Y1 challenge](https://github.com/Imageomics/HDR-anomaly-challenge-sample).
+## Google Colab
 
+Run these cells in order:
+
+```bash
+!git clone https://github.com/Imageomics/HDR-SMood-Challenge-sample.git
+%cd HDR-SMood-Challenge-sample
+```
+
+```bash
+# Optional: if dataset access needs auth
+import os
+os.environ["HF_TOKEN"] = "YOUR_HF_TOKEN"
+```
+
+```bash
+!python scripts/colab_prepare.py \
+  --repo_dir . \
+  --mount_drive \
+  --install_deps \
+  --persistent_root "/content/drive/MyDrive/beetles_persist" \
+  --hf_token "$HF_TOKEN" \
+  --download_dataset \
+  --download_backbone \
+  --link_weights_to_drive
+```
+
+```bash
+!python scripts/colab_train.py \
+  --repo_dir . \
+  --mount_drive \
+  --drive_out "/content/drive/MyDrive/beetles_submission" \
+  --persistent_root "/content/drive/MyDrive/beetles_persist" \
+  --folds 0,1,2 \
+  --epochs 12 \
+  --batch_size 8 \
+  --num_workers 2 \
+  --image_size 224 \
+  --max_specimens_train 8 \
+  --crps_weight 0.25 \
+  --name_dropout_prob 0.15 \
+  --domain_dropout_prob 0.25 \
+  --hf_token "$HF_TOKEN" \
+  --resume \
+  --skip_completed
+```
+
+Colab OOM tip:
+- Start with `--batch_size 4 --max_specimens_train 6`.
+- If OOM persists, use `--batch_size 2 --image_size 192`.
+
+Resume and avoid re-download:
+- Keep `--persistent_root` on Google Drive. It stores:
+  - `hf_cache` (dataset cache)
+  - `torch_cache` (pretrained model cache)
+  - `weights` (fold checkpoints, per-epoch resume states, done markers)
+- Re-run the exact same command after disconnect/interruption.
+  - Completed folds are skipped.
+  - In-progress folds resume from `weights/fold_{k}.state`.
+
+If you only want metadata priors quickly:
+
+```bash
+python src/build_priors.py --split train --output weights/priors.json
+```
+
+## Evaluate
+
+```bash
+python src/eval.py \
+  --checkpoint weights/model.pt \
+  --batch_size 8
+```
+
+Outputs include RMSE, NLL, and Gaussian CRPS for each target.
+
+## Build Submission Zip
+
+```bash
+bash scripts/make_submission.sh
+```
+
+This creates `submission.zip` with zip-root contents:
+- `model.py`
+- `requirements.txt`
+- `weights/` (entire folder, including `model.pt`, `priors.json`, and any `fold_*.pt`)
+
+## Sanity Check Submission
+
+```bash
+python scripts/sanity_check_submission.py --zip submission.zip
+```
+
+This test:
+1. Extracts archive to a temp directory.
+2. Runs `import model; Model().load()`.
+3. Calls `predict()` with a dummy event.
+4. Verifies required output keys and positive `sigma`.
+
+## Inference Contract (`model.py`)
+
+`Model.predict(event_records)` expects a list for one sampling event where each item contains:
+- `relative_img` (PIL.Image)
+- `colorpicker_img` (PIL.Image, optional but supported)
+- `scalebar_img` (PIL.Image, optional but supported)
+- `scientificName` (str)
+- `domainID` (int)
+
+Returns:
+
+```python
+{
+  "SPEI_30d": {"mu": float, "sigma": float},
+  "SPEI_1y":  {"mu": float, "sigma": float},
+  "SPEI_2y":  {"mu": float, "sigma": float},
+}
+```
